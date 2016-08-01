@@ -2,13 +2,25 @@
 
 Semantics-based [automated program repair](http://automated-program-repair.org) tool for C programs. Angelix fixes bugs manifested by failing test cases and searches for the minimal change in order to preserve the original source code. Powered by KLEE symbolic execution engine and Z3 SMT solver.
 
+If you use Angelix in your research project, please include the following citation:
+
+    @inproceedings{mechtaev2016angelix,
+        title={Angelix: Scalable multiline program patch synthesis via symbolic analysis},
+        author={Mechtaev, Sergey and Yi, Jooyong and Roychoudhury, Abhik},
+        booktitle={Proceedings of the 38th International Conference on Software Engineering},
+        pages={691--701},
+        year={2016},
+        organization={ACM}
+    }
+            
+
 ## Installation ##
 
 Angelix is distributed in source code form and pre-installed in VirtualBox image. The VirtualBox image also contains Angelix ICSE'16 and SemFix ICSE'13 evaluation results.
 
 ### Option 1: VirtualBox image ###
 
-You can [request](https://docs.google.com/forms/d/1XoQ3AomEwd2hke7-ty8CDaQ_iH7TH3W5foO5BQWc-6o/viewform?usp=send_form) VirtualBox image with pre-installed Angelix. Note that it may not include the latest version of Angelix.
+You can [request](https://docs.google.com/forms/d/1XoQ3AomEwd2hke7-ty8CDaQ_iH7TH3W5foO5BQWc-6o/viewform?usp=send_form) VirtualBox image with pre-installed Angelix. Note that it does not contain the latest version of Angelix and is distributed only for the demonstration purpose.
 
 ### Option 2: Build from source ###
 
@@ -29,7 +41,16 @@ Install dependencies:
     sudo apt-get install git wget xz-utils build-essential
     sudo apt-get install curl dejagnu subversion bison flex bc libcap-dev
     sudo apt-get install cmake libncurses5-dev libboost-all-dev
-    sudo apt-get install default-jdk sbt
+
+Install Java 8 (for Ubuntu 14.04) and Maven:
+
+    sudo apt-get install software-properties-common
+    sudo apt-add-repository ppa:webupd8team/java
+    sudo apt-get update
+    sudo apt-get install oracle-java8-installer
+    sudo apt-get install maven
+    
+Install SBT by following [intructions](http://www.scala-sbt.org/0.13/docs/Installing-sbt-on-Linux.html).
 
 Set Angelix environment:
 
@@ -37,7 +58,7 @@ Set Angelix environment:
 
 Download and build required modules:
 
-    make all
+    make default
     
 Run tests:
 
@@ -49,19 +70,31 @@ Run tests:
 * [Manual](doc/Manual.md)
 * [Troubleshooting](doc/Troubleshooting.md)
 
-Run `angelix --help` to see the list of available options.
+To set optimal configuration for your subject, refer to the Configuration section of the [manual](doc/Manual.md).
 
-## SemFix ##
+## Changelog
 
-SemFix is a predecessor of Angelix. Taking advantage of the modular design of Angelix, we incorporate the algorithm of SemFix into Angelix. SemFix can be activated using the `--semfix` option of Angelix.
+### [1.0](https://github.com/mechtaev/angelix/tree/1.0) (2016-Jul-8)
+
+**Implemented enhancements:**
+
+- Supported NULL pointer, break and continue statements, 64-bit long in ANGELIX_OUTPUT.
+
+**Fixed bugs:**
+
+- Various reported bugs in frontend and localization.
+
+### [icse16](https://github.com/mechtaev/angelix/tree/icse16) (2016-Feb-19)
+
+Initial release used to reproduce ICSE'16 experiments. Available on [VirtualBox VM](https://docs.google.com/forms/d/1XoQ3AomEwd2hke7-ty8CDaQ_iH7TH3W5foO5BQWc-6o/viewform?usp=send_form).
 
 ## Publications ##
 
-**Angelix: Scalable Multiline Program Patch Synthesis via Symbolic Analysis.** S. Mechtaev, J. Yi, A. Roychoudhury. ICSE'16.
+**Angelix: Scalable Multiline Program Patch Synthesis via Symbolic Analysis.** S. Mechtaev, J. Yi, A. Roychoudhury. ICSE'16. [\[pdf\]](http://www.comp.nus.edu.sg/~abhik/pdf/ICSE16-angelix.pdf)
 
-**DirectFix: Looking for Simple Program Repairs.** S. Mechtaev, J. Yi, A. Roychoudhury. ICSE'15.
+**DirectFix: Looking for Simple Program Repairs.** S. Mechtaev, J. Yi, A. Roychoudhury. ICSE'15. [\[pdf\]](https://www.comp.nus.edu.sg/~abhik/pdf/ICSE15-directfix.pdf)
 
-**SemFix: Program Repair via Semantic Analysis.** H.D.T. Nguyen, D. Qi, A. Roychoudhury, S. Chandra. ICSE'13.
+**SemFix: Program Repair via Semantic Analysis.** H.D.T. Nguyen, D. Qi, A. Roychoudhury, S. Chandra. ICSE'13. [\[pdf\]](https://www.comp.nus.edu.sg/~abhik/pdf/ICSE13-SEMFIX.pdf)
 
 ## Contributors ##
 

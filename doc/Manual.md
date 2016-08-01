@@ -12,7 +12,8 @@
   * [Expressions](#expressions)
   * [Statements](#statements)
 * [Synthesis Levels](#synthesis-levels)
-* [Options](#options)
+* [SemFix](#semfix)
+* [Configuration](#configuration)
 
 ## Introduction ##
 
@@ -28,7 +29,7 @@ Angelix is designed to support Makefile-based projects. The following is require
 * Compilation and linking are done by separate compiler calls.
 * Project is configured to use static linking.
 * All executables and object files are removed (e.g. run `make clean`).
-* Angelix environment is set as shown above.
+* Angelix environment is activated (`source /path/to/angelix/activate`).
 
 Angelix is hygienic (it does not modify original project files), however, it also assumes that the source code only uses relative references to the source tree. All intermediate data is stored in the `.angelix` directory.
 
@@ -85,10 +86,11 @@ Output expressions are wrapped with `ANGELIX_OUTPUT` macro providing their type 
 
 The following types of output expressions are supported:
 
-* [x] int
-* [x] bool
-* [x] char
-* [ ] str (null-terminated string)
+* int
+* long
+* bool
+* char
+* str (null-terminated string)
 
 ### Running ###
 
@@ -193,6 +195,8 @@ Existing  | Additional
 --------- | ----------
 `||`      | `&&`
 `&&`      | `||`
+`==`      | `!=`
+`!=`      | `==`
 `<`       | `<=`
 `<=`      | `<`
 `>`       | `>=`
@@ -244,4 +248,26 @@ Additional visible variables, integer constant, `>`, `>=`, `||`, `&&`, `+`, `-`.
 
 Additional visible variables, integer constant, `>`, `>=`, `+`, `-`, `ite`.
 
-## Options ##
+## SemFix ##
+
+SemFix is a predecessor of Angelix. Taking advantage of the modular design of Angelix, we incorporated the algorithm of SemFix into Angelix. To download and build SemFix dependencies, execute `make semfix`, to verify your installation, run `make test-semfix`. After installation, SemFix can be activated using the `--semfix` option of Angelix.
+
+## Configuration ##
+
+Default Angelix configuration corresponds to a very narrow repair search space. Typically, you need to specify defect classes, synthesis levels and bounds for symbolic execution and program synthesis. The values of the paramenters depends on the size and the structure of your subject programs. 
+
+Run `angelix --help` to see the list of available options. You can find example configurations for small programs in `tests/tests.py` of Angelix distribution and in `options.json` file for large programs in ICSE'16 experiments [scripts](http://www.comp.nus.edu.sg/~release/angelix/angelix-experiments.tar.gz).
+
+An example of configuration is the following:
+
+    --defect if-conditions loop-conditions assignments \
+    --synthesis-levels alternatives extended-arithmetic extended-logic extended-inequalities \
+    --timeout 3600 \
+    --group-size 1 \
+    --klee-solver-timeout 20 \
+    --klee-timeout 300 \
+    --klee-max-forks 200 \
+    --synthesis-timeout 100000 \
+    --synthesis-global-vars \
+    --synthesis-func-params \
+    --synthesis-used-vars

@@ -61,16 +61,17 @@ public:
 
   void VisitBinaryOperator(BinaryOperator *Node) {
     std::string opcode_str = BinaryOperator::getOpcodeStr(Node->getOpcode()).lower();
-    if (opcode_str == "!=") {
-      OS << "(not (= ";
-      PrintExpr(Node->getLHS());
-      OS << " ";
-      PrintExpr(Node->getRHS());
-      OS << "))";
-      return;
-    }
+    // if (opcode_str == "!=") {
+    //   OS << "(not (= ";
+    //   PrintExpr(Node->getLHS());
+    //   OS << " ";
+    //   PrintExpr(Node->getRHS());
+    //   OS << "))";
+    //   return;
+    // }
 
     replaceStr(opcode_str, "==", "=");
+    replaceStr(opcode_str, "!=", "neq");
     replaceStr(opcode_str, "||", "or");
     replaceStr(opcode_str, "&&", "and");
 
@@ -94,6 +95,10 @@ public:
 
   void VisitImplicitCastExpr(ImplicitCastExpr *Node) {
     PrintExpr(Node->getSubExpr());
+  }
+
+  void VisitCastExpr(CastExpr *Node) {
+    PrintExpr(Node->getSubExpr()); // TODO: this may not always work
   }
 
   void VisitParenExpr(ParenExpr *Node) {
@@ -192,6 +197,13 @@ public:
     } else {
       OS << Node->getNameInfo();
     }
+  }
+
+  void VisitArraySubscriptExpr(ArraySubscriptExpr *Node) {
+    PrintExpr(Node->getLHS());
+    OS << "_LBRSQR_";
+    PrintExpr(Node->getRHS());
+    OS << "_RBRSQR_";
   }
 
 };

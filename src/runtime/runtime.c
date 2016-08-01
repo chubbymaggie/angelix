@@ -171,6 +171,7 @@ int ht_get( hashtable_t *hashtable, char *key ) {
 #define MAX_PATH_LENGTH 1000
 #define MAX_NAME_LENGTH 1000
 #define INT_LENGTH 15
+#define LONG_LENGTH (INT_LENGTH * 2)
 
 hashtable_t *output_instances;
 hashtable_t *choice_instances;
@@ -215,6 +216,12 @@ char* print_int(int i) {
   return str;
 }
 
+char* print_long(long i) {
+  char* str = (char*) malloc(LONG_LENGTH * sizeof(char));
+  sprintf(str, "%ld", i);
+  return str;
+}
+
 char* print_bool(bool b) {
   if (b) {
     return "true";
@@ -239,7 +246,7 @@ char* print_str(char* s) {
 */
 
 char* load_instance(char* var, int instance) {
-  char *dir = getenv("ANGELIX_DUMP");
+  char *dir = getenv("ANGELIX_LOAD");
   char file[MAX_PATH_LENGTH + 1];
   sprintf(file, "%s/%s/%d", dir, var, instance);
 
@@ -322,6 +329,7 @@ LOAD_PROTO(char)
   }
 
 DUMP_PROTO(int)
+DUMP_PROTO(long)
 DUMP_PROTO(bool)
 DUMP_PROTO(char)
 DUMP_PROTO(str)
@@ -329,7 +337,7 @@ DUMP_PROTO(str)
 #undef WRITE_TO_FILE_PROTO
 
 #define SYMBOLIC_OUTPUT_PROTO(type, typestr)                  \
-  int angelix_symbolic_output_##type(type expr, char* id) {   \
+  type angelix_symbolic_output_##type(type expr, char* id) {   \
     if (!output_instances)                                    \
       init_tables();                                          \
     int previous = ht_get(output_instances, id);              \
@@ -349,6 +357,7 @@ DUMP_PROTO(str)
   }
 
 SYMBOLIC_OUTPUT_PROTO(int, "int")
+SYMBOLIC_OUTPUT_PROTO(long, "long")
 SYMBOLIC_OUTPUT_PROTO(bool, "bool")
 SYMBOLIC_OUTPUT_PROTO(char, "char")
 
@@ -376,7 +385,7 @@ void angelix_symbolic_reachable(char* id) {
 
 
 #define DUMP_OUTPUT_PROTO(type)                         \
-  int angelix_dump_output_##type(type expr, char* id) { \
+  type angelix_dump_output_##type(type expr, char* id) { \
     if (getenv("ANGELIX_DUMP")) {                       \
       if (!output_instances)                            \
         init_tables();                                  \
@@ -396,6 +405,7 @@ void angelix_symbolic_reachable(char* id) {
   }
 
 DUMP_OUTPUT_PROTO(int)
+DUMP_OUTPUT_PROTO(long)
 DUMP_OUTPUT_PROTO(bool)
 DUMP_OUTPUT_PROTO(char)
 
@@ -538,8 +548,11 @@ CHOOSE_CONST_PROTO(bool, "bool")
 
 #undef CHOOSE_CONST_PROTO
 
-// begin line, begin column, end line, end column
-void angelix_trace(int bl, int bc, int el, int ec) {
+int angelix_ignore() {
+  return 0;
+}
+
+int angelix_trace_and_load(int expr, int bl, int bc, int el, int ec) {
   if (getenv("ANGELIX_TRACE")) {
     FILE *fp = fopen(getenv("ANGELIX_TRACE"), "a");
     if (fp == NULL)
@@ -547,8 +560,25 @@ void angelix_trace(int bl, int bc, int el, int ec) {
     fprintf(fp, "%d %d %d %d\n", bl, bc, el, ec);
     fclose(fp);
   }
-}
-
-int angelix_ignore() {
-  return 0;
+  if (getenv("ANGELIX_LOAD")) {
+    if (!choice_instances)
+      init_tables();
+    char str_id[INT_LENGTH * 4 + 4 + 1];
+    sprintf(str_id, "%d-%d-%d-%d", bl, bc, el, ec);
+    int previous = ht_get(choice_instances, str_id);
+    int instance;
+    if (table_miss) {
+      instance = 0;
+    } else {
+      instance = previous + 1;
+    }
+    ht_set(choice_instances, str_id, instance);
+    char* data = load_instance(str_id, instance);
+    if (!data) {
+      return expr;
+    }
+    int result = parse_int(data);
+    return result;
+  }
+  return expr;
 }

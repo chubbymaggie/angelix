@@ -76,6 +76,16 @@ SourceRange getExpandedLoc(const clang::Stmt* expr, SourceManager &srcMgr) {
 
 
 std::string toString(const clang::Stmt* stmt) {
+  /* Special case for break and continue statement
+     Reason: There were semicolon ; and newline found
+     after break/continue statement was converted to string
+  */
+  if (dyn_cast<clang::BreakStmt>(stmt))
+    return "break";
+  
+  if (dyn_cast<clang::ContinueStmt>(stmt))
+    return "continue";
+
   clang::LangOptions LangOpts;
   clang::PrintingPolicy Policy(LangOpts);
   std::string str;
@@ -109,10 +119,14 @@ StatementMatcher RepairableNode =
         declRefExpr(to(varDecl(anyOf(hasType(isInteger()),
                                      hasType(pointerType()))))).bind("repairable"),
         declRefExpr(to(enumConstantDecl())).bind("repairable"),
+        declRefExpr(to(namedDecl())), // no binding because it is only for member expression
+        arraySubscriptExpr(hasIndex(ignoringImpCasts(anyOf(integerLiteral(), declRefExpr(), memberExpr()))),
+                           hasBase(implicitCastExpr(hasSourceExpression(declRefExpr(hasType(arrayType(hasElementType(isInteger())))))))).bind("repairable"),
         integerLiteral().bind("repairable"),
         characterLiteral().bind("repairable"),
         // TODO: I need to make sure that base is a variable here:
         memberExpr().bind("repairable"), 
+        castExpr(hasType(asString("void *")), hasDescendant(integerLiteral(equals(0)))).bind("repairable"), // NULL
         binaryOperator(anyOf(hasOperatorName("=="),
                              hasOperatorName("!="),
                              hasOperatorName("<="),
@@ -197,27 +211,32 @@ StatementMatcher NonTrivialRepairableLoopCondition =
 
 
 //TODO: better to create a variables, but I don't know what the type is
-#define isTopLevelStatement        \
-  anyOf(hasParent(compoundStmt()), \
-        hasParent(ifStmt()),       \
-        hasParent(labelStmt()),    \
-        hasParent(whileStmt()),    \
-        hasParent(forStmt()))
+#define isTopLevelStatement                     \
+  allOf(anyOf(hasParent(compoundStmt()),        \
+              hasParent(ifStmt()),              \
+              hasParent(labelStmt()),           \
+              hasParent(whileStmt()),           \
+              hasParent(forStmt())),            \
+        unless(has(forStmt())),                 \
+        unless(has(whileStmt())),               \
+        unless(has(ifStmt())))
 
 
 StatementMatcher RepairableAssignment =
   binaryOperator(isTopLevelStatement,
-                 hasOperatorName("="),
+                 anyOf(hasOperatorName("="), hasOperatorName("+="), hasOperatorName("-="), hasOperatorName("*=")),
                  anyOf(hasLHS(ignoringParenImpCasts(declRefExpr())),
-                       hasLHS(ignoringParenImpCasts(memberExpr()))),
+                       hasLHS(ignoringParenImpCasts(memberExpr())),
+                       hasLHS(ignoringParenImpCasts(arraySubscriptExpr()))),
                  hasRHS(ignoringParenImpCasts(RepairableExpression)));
 
 
 StatementMatcher NonTrivialRepairableAssignment =
   binaryOperator(isTopLevelStatement,
-                 hasOperatorName("="),
+                 anyOf(hasOperatorName("="), hasOperatorName("+="), hasOperatorName("-="), hasOperatorName("*=")),
                  anyOf(hasLHS(ignoringParenImpCasts(declRefExpr())),
-                       hasLHS(ignoringParenImpCasts(memberExpr()))),
+                       hasLHS(ignoringParenImpCasts(memberExpr())),
+                       hasLHS(ignoringParenImpCasts(arraySubscriptExpr()))),
                  hasRHS(ignoringParenImpCasts(NonTrivialRepairableExpression)));
 
 //TODO: currently these selectors are not completely orthogonal
@@ -238,7 +257,7 @@ StatementMatcher InterestingRepairableExpression =
 
 // TODO: make variable instead of macro
 #define hasAngelixOutput\
-  hasDescendant(callExpr(callee(functionDecl(hasName("angelix_ignore")))))
+ anyOf(hasDescendant(callExpr(callee(functionDecl(matchesName("angelix_ignore"))))), callExpr(callee(functionDecl(matchesName("angelix_ignore")))))
 
 
 StatementMatcher InterestingCondition =
@@ -246,10 +265,10 @@ StatementMatcher InterestingCondition =
         whileStmt(hasCondition(expr(unless(hasAngelixOutput)).bind("repairable"))),
         forStmt(hasCondition(expr(unless(hasAngelixOutput)).bind("repairable"))));
 
-
+//TODO: do I need it?
 StatementMatcher InterestingIntegerAssignment =
   binaryOperator(isTopLevelStatement,
-                 hasOperatorName("="),
+                 anyOf(hasOperatorName("="), hasOperatorName("+="), hasOperatorName("-="), hasOperatorName("*=")),
                  anyOf(hasLHS(ignoringParenImpCasts(declRefExpr(hasType(isInteger())))),
                        hasLHS(ignoringParenImpCasts(memberExpr(hasType(isInteger()))))),
                  hasRHS(expr().bind("repairable")),
@@ -258,9 +277,10 @@ StatementMatcher InterestingIntegerAssignment =
 
 StatementMatcher InterestingAssignment =
   binaryOperator(isTopLevelStatement,
-                 hasOperatorName("="),
+                 anyOf(hasOperatorName("="), hasOperatorName("+="), hasOperatorName("-="), hasOperatorName("*=")),
                  anyOf(hasLHS(ignoringParenImpCasts(declRefExpr())),
-                       hasLHS(ignoringParenImpCasts(memberExpr()))),
+                       hasLHS(ignoringParenImpCasts(memberExpr())),
+                       hasLHS(ignoringParenImpCasts(arraySubscriptExpr()))),
                  unless(hasAngelixOutput)).bind("repairable");
 
 
@@ -270,6 +290,6 @@ StatementMatcher InterestingCall =
 
 
 StatementMatcher InterestingStatement =
-  anyOf(InterestingAssignment, InterestingCall);
+  anyOf(InterestingAssignment, InterestingCall, breakStmt().bind("repairable"),continueStmt().bind("repairable"));
 
 #endif // ANGELIX_COMMON_H

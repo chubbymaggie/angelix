@@ -1,23 +1,31 @@
-MODULES = llvm-gcc llvm2 minisat stp klee-uclibc klee z3 clang bear runtime frontend maxsmt synthesis semfix
-CLEAN_MODULES = $(addprefix clean-, $(MODULES))
+DEFAULT_MODULES = llvm-gcc llvm2 minisat stp klee-uclibc klee z3 clang bear runtime frontend maxsmt synthesis
+OPTIONAL_MODULES = nsynth semfix
+CLEAN_MODULES = $(addprefix clean-, $(DEFAULT_MODULES)) $(addprefix clean-, $(OPTIONAL_MODULES))
 
 help:
 	@echo ~~~~~~~~~~~~~~~~~~ Angelix ~~~~~~~~~~~~~~~~~~
 	@echo Semantics-based Automated Program Repair Tool
 	@echo
+	@echo \'make default\''          'build default modules
 	@echo \'make all\''                  'build all modules
 	@echo \'make MODULE\''                    'build module
 	@echo \'make clean-all\''            'clean all modules
 	@echo \'make clean-MODULE\''              'clean module
 	@echo \'make test\''                         'run tests
+	@echo \'make test-semfix\''           'run semfix tests
+	@echo \'make docker\''              'build docker image
 	@echo
-	@echo Modules:
-	@echo -n ' '$(foreach module, $(MODULES),"* $(module)\n")
+	@echo Default modules:
+	@echo -n ' '$(foreach module, $(DEFAULT_MODULES),"* $(module)\n")
+	@echo
+	@echo Optional modules:
+	@echo -n ' '$(foreach module, $(OPTIONAL_MODULES),"* $(module)\n")
 
-all: $(MODULES)
+default: $(DEFAULT_MODULES)
+all: $(DEFAULT_MODULES) $(OPTIONAL_MODULES)
 clean-all: $(CLEAN_MODULES)
 
-.PHONY: help all $(MODULES) clean-all $(CLEAN_MODULES) test
+.PHONY: help all $(DEFAULT_MODULES) $(OPTIONAL_MODULES) clean-all $(CLEAN_MODULES) test test-semfix docker
 
 # Information for retrieving dependencies
 
@@ -39,7 +47,7 @@ COMPILER_RT_ARCHIVE=compiler-rt-3.7.0.src.tar.xz
 CLANG_TOOLS_EXTRA_URL=http://llvm.org/git/clang-tools-extra.git
 STP_URL=https://github.com/stp/stp.git
 MINISAT_URL=https://github.com/niklasso/minisat.git
-Z3_URL=https://github.com/Z3Prover/z3.git
+Z3_URL=https://github.com/mechtaev/z3.git
 Z3_2_19_URL=http://research.microsoft.com/en-us/um/redmond/projects/z3/z3-2.19.tar.gz
 Z3_2_19_ARCHIVE=z3-2.19.tar.gz
 KLEE_UCLIBC_URL=https://github.com/klee/klee-uclibc.git
@@ -52,6 +60,9 @@ LOCAL_LIB_ARCHIVE=local-lib-2.000018.tar.gz
 
 test:
 	python3 tests/tests.py
+
+test-semfix:
+	python3 tests/semfix-tests.py
 
 # LLVM-GCC #
 
@@ -217,6 +228,16 @@ clean-synthesis:
 
 distclean-synthesis: clean-synthesis
 
+# Synthesis #
+
+nsynth:
+	mvn install:install-file -Dfile=$(Z3_JAR) -DgroupId=com.microsoft.z3 -DartifactId=z3 -Dversion=4 -Dpackaging=jar
+	cd $(ANGELIX_ROOT)/src/nsynth && mvn package
+
+clean-nsynth:
+
+distclean-nsynth: clean-nsynth
+
 # Clang #
 
 clang: build/$(LLVM3_ARCHIVE) build/$(CLANG_ARCHIVE) build/$(COMPILER_RT_ARCHIVE)
@@ -267,3 +288,6 @@ $(BEAR_DIR):
 
 clean-bear:
 	rm -rf "$(BEAR_DIR)/build"
+
+docker:
+	docker build -t angelix .

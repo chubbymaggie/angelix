@@ -5,6 +5,10 @@ import logging
 from glob import glob
 import os
 from pprint import pprint
+import time
+import statistics
+import shutil
+
 
 import z3
 from z3 import Select, Concat, Array, BitVecSort, BitVecVal, Solver, BitVec
@@ -125,7 +129,7 @@ def parse_variables(vars):
     for name, type in output_type.items():
         for i in range(0, len(output_instances[name])):
             if i not in output_instances[name]:
-                logger.error('inconsistent variables')
+                logger.warn('output instance {} for variable {} is missing'.format(i, name))
                 raise InferenceError()
         outputs[name] = (type, len(output_instances[name]))
 
@@ -133,7 +137,7 @@ def parse_variables(vars):
     for expr, type in choice_type.items():
         for i in range(0, len(choice_instances[expr])):
             if i not in choice_instances[expr]:
-                logger.error('inconsistent variables')
+                logger.warn('choice instance {} for variable {} is missing'.format(i, name))
                 raise InferenceError()
         choices[expr] = (type, len(choice_instances[expr]), list(choice_env[expr]))
 
@@ -142,9 +146,10 @@ def parse_variables(vars):
 
 class Inferrer:
 
-    def __init__(self, config, tester):
+    def __init__(self, config, tester, load):
         self.config = config
         self.run_test = tester
+        self.load = load
 
     def _reduce_angelic_forest(self, angelic_paths):
         '''reduce the size of angelic forest (select shortest paths)'''
@@ -166,7 +171,7 @@ class Inferrer:
         return baf
 
 
-    def __call__(self, project, test, dump):
+    def __call__(self, project, test, dump, validation_project):
         logger.info('inferring specification for test \'{}\''.format(test))
 
         environment = dict(os.environ)
@@ -188,7 +193,15 @@ class Inferrer:
             environment['ANGELIX_USE_SEMFIX_SYN'] = 'YES'
         environment['ANGELIX_KLEE_WORKDIR'] = project.dir
 
+        klee_start_time = time.time()
         self.run_test(project, test, klee=True, env=environment)
+        klee_end_time = time.time()
+        klee_elapsed = klee_end_time - klee_start_time
+        statistics.data['time']['klee'] += klee_elapsed
+        statistics.save()
+
+        logger.info('sleeping for 1 second...')
+        time.sleep(1)
 
         smt_glob = join(project.dir, 'klee-out-0', '*.smt2')
         smt_files = glob(smt_glob)
@@ -237,8 +250,11 @@ class Inferrer:
                 oracle[var].append(content)
 
         # solving path constraints
+        inference_start_time = time.time()
 
         angelic_paths = []
+
+        z3.set_param("timeout", self.config['path_solving_timeout'])
 
         solver = Solver()
 
@@ -253,16 +269,23 @@ class Inferrer:
 
             variables = [str(var) for var in get_vars(path)
                          if str(var).startswith('int!')
+                         or str(var).startswith('long!')
                          or str(var).startswith('bool!')
                          or str(var).startswith('char!')
                          or str(var).startswith('reachable!')]
 
-            outputs, choices, constants, reachable, original_available = parse_variables(variables)
+            try:
+                outputs, choices, constants, reachable, original_available = parse_variables(variables)
+            except:
+                continue
 
             # name -> value list (parsed)
             oracle_constraints = dict()
 
             def str_to_int(s):
+                return int(s)
+
+            def str_to_long(s):
                 return int(s)
 
             def str_to_bool(s):
@@ -279,34 +302,55 @@ class Inferrer:
 
             dump_parser_by_type = dict()
             dump_parser_by_type['int'] = str_to_int
+            dump_parser_by_type['long'] = str_to_long
             dump_parser_by_type['bool'] = str_to_bool
             dump_parser_by_type['char'] = str_to_char
 
-            def bool_to_bv32(b):
+            def bool_to_bv(b):
                 if b:
                     return BitVecVal(1, 32)
                 else:
                     return BitVecVal(0, 32)
 
-            def int_to_bv32(i):
+            def int_to_bv(i):
                 return BitVecVal(i, 32)
+            
+            def long_to_bv(i):
+                return BitVecVal(i, 64)
 
-            to_bv32_converter_by_type = dict()
-            to_bv32_converter_by_type['bool'] = bool_to_bv32
-            to_bv32_converter_by_type['int'] = int_to_bv32
+            def char_to_bv(c):
+                return BitVecVal(ord(c), 32)
 
-            def bv32_to_bool(bv):
+            to_bv_converter_by_type = dict()
+            to_bv_converter_by_type['bool'] = bool_to_bv
+            to_bv_converter_by_type['int'] = int_to_bv
+            to_bv_converter_by_type['long'] = long_to_bv
+            to_bv_converter_by_type['char'] = char_to_bv
+            
+            def bv_to_bool(bv):
                 return bv.as_long() != 0
 
-            def bv32_to_int(bv):
+            def bv_to_int(bv):
                 l = bv.as_long()
                 if l >> 31 == 1:  # negative
-                    l -= 4294967296
+                    l -= pow(2, 32)
                 return l
 
-            from_bv32_converter_by_type = dict()
-            from_bv32_converter_by_type['bool'] = bv32_to_bool
-            from_bv32_converter_by_type['int'] = bv32_to_int
+            def bv_to_long(bv):
+                l = bv.as_long()
+                if l >> 63 == 1:  # negative
+                    l -= pow(2, 64)
+                return l
+
+            def bv_to_char(bv):
+                l = bv.as_long()
+                return chr(l)
+
+            from_bv_converter_by_type = dict()
+            from_bv_converter_by_type['bool'] = bv_to_bool
+            from_bv_converter_by_type['int'] = bv_to_int
+            from_bv_converter_by_type['long'] = bv_to_long
+            from_bv_converter_by_type['char'] = bv_to_char
 
             matching_path = True
 
@@ -354,6 +398,16 @@ class Inferrer:
                               Select(array, BitVecVal(1, 32)),
                               Select(array, BitVecVal(0, 32)))
 
+            def array_to_bv64(array):
+                return Concat(Select(array, BitVecVal(7, 32)),
+                              Select(array, BitVecVal(6, 32)),
+                              Select(array, BitVecVal(5, 32)),
+                              Select(array, BitVecVal(4, 32)),
+                              Select(array, BitVecVal(3, 32)),
+                              Select(array, BitVecVal(2, 32)),
+                              Select(array, BitVecVal(1, 32)),
+                              Select(array, BitVecVal(0, 32)))
+
             def angelic_variable(type, expr, instance):
                 pattern = '{}!choice!{}!{}!{}!{}!{}!angelic'
                 s = pattern.format(type, expr[0], expr[1], expr[2], expr[3], instance)
@@ -371,7 +425,10 @@ class Inferrer:
 
             def output_variable(type, name, instance):
                 s = '{}!output!{}!{}'.format(type, name, instance)
-                return Array(s, BitVecSort(32), BitVecSort(8))
+                if type == 'long':
+                    return Array(s, BitVecSort(32), BitVecSort(8))
+                else:
+                    return Array(s, BitVecSort(32), BitVecSort(8))
 
             def angelic_selector(expr, instance):
                 s = 'angelic!{}!{}!{}!{}!{}'.format(expr[0], expr[1], expr[2], expr[3], instance)
@@ -389,8 +446,12 @@ class Inferrer:
                 type, _ = outputs[name]
                 for i, value in enumerate(values):
                     array = output_variable(type, name, i)
-                    bv_value = to_bv32_converter_by_type[type](value)
-                    solver.add(bv_value == array_to_bv32(array))
+                    bv_value = to_bv_converter_by_type[type](value)
+                    if type == 'long':
+                        solver.add(bv_value == array_to_bv64(array))
+                    else:
+                        solver.add(bv_value == array_to_bv32(array))
+                    
 
             for (expr, item) in choices.items():
                 type, instances, env = item
@@ -411,21 +472,31 @@ class Inferrer:
 
             result = solver.check()
             if result != z3.sat:
-                logger.info('UNSAT')
+                logger.info('UNSAT') # TODO: can be timeout
                 continue
             model = solver.model()
 
             # expr -> (angelic * original * env) list
             angelic_path = dict()
 
+            if os.path.exists(self.load[test]):
+                shutil.rmtree(self.load[test])
+            os.mkdir(self.load[test])
+
             for (expr, item) in choices.items():
                 angelic_path[expr] = []
                 type, instances, env = item
+                
+                expr_str = '{}-{}-{}-{}'.format(expr[0], expr[1], expr[2], expr[3])
+                expression_dir = join(self.load[test], expr_str)
+                if not os.path.exists(expression_dir):
+                    os.mkdir(expression_dir)
+
                 for instance in range(0, instances):
                     bv_angelic = model[angelic_selector(expr, instance)]
-                    angelic = from_bv32_converter_by_type[type](bv_angelic)
+                    angelic = from_bv_converter_by_type[type](bv_angelic)
                     bv_original = model[original_selector(expr, instance)]
-                    original = from_bv32_converter_by_type[type](bv_original)
+                    original = from_bv_converter_by_type[type](bv_original)
                     if original_available:
                         logger.info('expression {}[{}]: angelic = {}, original = {}'.format(expr,
                                                                                             instance,
@@ -438,7 +509,7 @@ class Inferrer:
                     env_values = dict()
                     for name in env:
                         bv_env = model[env_selector(expr, instance, name)]
-                        value = from_bv32_converter_by_type['int'](bv_env)
+                        value = from_bv_converter_by_type['int'](bv_env)
                         env_values[name] = value
 
                     if original_available:
@@ -446,9 +517,24 @@ class Inferrer:
                     else:
                         angelic_path[expr].append((angelic, None, env_values))
 
-            # TODO: add constants to angelic path
+                    # Dump angelic path to dump folder
+                    instance_file = join(expression_dir, str(instance))
+                    with open(instance_file, 'w') as file:
+                        if isinstance(angelic, bool):
+                            if angelic:
+                                file.write('1')
+                            else:
+                                file.write('0')
+                        else:
+                            file.write(str(angelic))
+            
 
-            angelic_paths.append(angelic_path)
+            # Run Tester to validate the dumped values
+            validated = self.run_test(validation_project, test, load=self.load[test])
+            if validated:
+                angelic_paths.append(angelic_path)
+            else:
+                logger.info('spurious angelic path')
 
         if self.config['synthesis_bool_only']:
             angelic_paths = self._boolean_angelic_forest(angelic_paths)
@@ -458,5 +544,19 @@ class Inferrer:
             angelic_paths = self._reduce_angelic_forest(angelic_paths)
         else:
             logger.info('found {} angelic paths for test \'{}\''.format(len(angelic_paths), test))
+
+        inference_end_time = time.time()
+        inference_elapsed = inference_end_time - inference_start_time
+        statistics.data['time']['inference'] += inference_elapsed
+
+        iter_stat = dict()
+        iter_stat['time'] = dict()
+        iter_stat['time']['klee'] = klee_elapsed
+        iter_stat['time']['inference'] = inference_elapsed
+        iter_stat['paths'] = dict()
+        iter_stat['paths']['explored'] = len(smt_files)
+        iter_stat['paths']['angelic'] = len(angelic_paths)
+        statistics.data['iterations']['klee'].append(iter_stat)
+        statistics.save()
 
         return angelic_paths

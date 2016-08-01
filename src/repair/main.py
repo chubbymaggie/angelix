@@ -7,10 +7,11 @@ import json
 import logging
 import time
 import sys
+import statistics
 
 from project import Validation, Frontend, Backend, CompilationError
 from utils import format_time, time_limit, TimeoutException
-from runtime import Dump, Trace
+from runtime import Dump, Trace, Load
 from transformation import RepairableTransformer, SuspiciousTransformer, \
                            FixInjector, TransformationError
 from testing import Tester
@@ -84,7 +85,7 @@ class Angelix:
             self.infer_spec = Semfix_Inferrer(working_dir, config, tester)
         else:
             self.synthesize_fix = Synthesizer(config, extracted, angelic_forest_file)
-            self.infer_spec = Inferrer(config, tester)
+            self.infer_spec = Inferrer(config, tester, Load(working_dir))
         self.instrument_for_localization = RepairableTransformer(config)
         self.instrument_for_inference = SuspiciousTransformer(config, extracted)
         self.apply_patch = FixInjector(config)
@@ -145,8 +146,11 @@ class Angelix:
 
 
     def evaluate(self, src):
+        testing_start_time = time.time()
+
         positive = []
         negative = []
+
         for test in self.validation_test_suite:
             if self.run_test(src, test):
                 positive.append(test)
@@ -161,6 +165,11 @@ class Angelix:
                     negative.remove(test)
                     positive.append(test)
 
+        testing_end_time = time.time()
+        testing_elapsed = testing_end_time - testing_start_time
+        statistics.data['time']['testing'] += testing_elapsed
+        statistics.save()
+
         return positive, negative
 
 
@@ -172,6 +181,8 @@ class Angelix:
             self.frontend_src.build()
         self.instrument_for_localization(self.frontend_src)
         self.frontend_src.build()
+
+        testing_start_time = time.time()
         if len(positive) > 0:
             logger.info('running positive tests for debugging')
         for test in positive:
@@ -217,6 +228,11 @@ class Angelix:
                 self.repair_test_suite.remove(test)
             self.validation_test_suite.remove(test)
 
+        testing_end_time = time.time()
+        testing_elapsed = testing_end_time - testing_start_time
+        statistics.data['time']['testing'] += testing_elapsed
+        statistics.save()
+
         logger.info("repair test suite: {}".format(self.repair_test_suite))
         logger.info("validation test suite: {}".format(self.validation_test_suite))
 
@@ -243,21 +259,24 @@ class Angelix:
             expressions = suspicious.pop(0)
             logger.info('considering suspicious expressions {}'.format(expressions))
             current_repair_suite = self.reduce(self.repair_test_suite, positive_traces, negative_traces, expressions)
+
             self.backend_src.restore_buggy()
             self.backend_src.configure()
             if config['build_before_instr']:
                 self.backend_src.build()
             self.instrument_for_inference(self.backend_src, expressions)
             self.backend_src.build()
+
             angelic_forest = dict()
             inference_failed = False
             for test in current_repair_suite:
                 try:
-                    angelic_forest[test] = self.infer_spec(self.backend_src, test, self.dump[test])
+                    angelic_forest[test] = self.infer_spec(self.backend_src, test, self.dump[test], self.frontend_src)
                     if len(angelic_forest[test]) == 0:
                         if test in positive:
                             logger.warning('angelic forest for positive test {} not found'.format(test))
                             current_repair_suite.remove(test)
+                            del angelic_forest[test]
                             continue
                         inference_failed = True
                         break
@@ -278,6 +297,7 @@ class Angelix:
                 logger.info('cannot synthesize fix')
                 continue
             logger.info('candidate fix synthesized')
+
             self.validation_src.restore_buggy()
             try:
                 self.apply_patch(self.validation_src, initial_fix)
@@ -285,6 +305,7 @@ class Angelix:
                 logger.info('cannot apply fix')
                 continue
             self.validation_src.build()
+
             pos, neg = self.evaluate(self.validation_src)
             if not set(neg).isdisjoint(set(current_repair_suite)):
                 not_repaired = list(set(current_repair_suite) & set(neg))
@@ -307,7 +328,8 @@ class Angelix:
                 try:
                     angelic_forest[counterexample] = self.infer_spec(self.backend_src,
                                                                      counterexample,
-                                                                     self.dump[counterexample])
+                                                                     self.dump[counterexample],
+                                                                     self.frontend_src)
                 except NoSmtError:
                     logger.warning("no smt file for test {}".format(counterexample))
                     negative_idx = negative_idx + 1
@@ -429,12 +451,16 @@ if __name__ == "__main__":
                         help='number of statements considered at once (default: %(default)s)')
     parser.add_argument('--group-by-score', action='store_true',
                         help='group statements by suspiciousness score (default: grouping by location)')
+    parser.add_argument('--localize-from-bottom', action='store_true',
+                        help='iterate suspicious expression from the bottom of file (default: localizing from top)')
     parser.add_argument('--suspicious', metavar='NUM', type=int, default=20,
                         help='total number of suspicious statements (default: %(default)s)')
     parser.add_argument('--localization', default='jaccard', choices=['jaccard', 'ochiai', 'tarantula'],
                         help='formula for localization algorithm (default: %(default)s)')
     parser.add_argument('--ignore-trivial', action='store_true',
                         help='ignore trivial expressions: variables and constants (default: %(default)s)')
+    parser.add_argument('--path-solving-timeout', metavar='MS', type=int, default=60000, # 60 seconds
+                        help='timeout for extracting single angelic path (default: %(default)s)')
     parser.add_argument('--max-angelic-paths', metavar='NUM', type=int, default=None,
                         help='max number of angelic paths for a test case (default: %(default)s)')
     parser.add_argument('--klee-search', metavar='HEURISTIC', default=None,
@@ -456,6 +482,8 @@ if __name__ == "__main__":
                         help='Don\'t terminate on transformation errors (default: %(default)s)')
     parser.add_argument('--ignore-infer-errors', action='store_true',
                         help='Consider path with errors for inference (default: %(default)s)')
+    parser.add_argument('--use-nsynth', action='store_true',
+                        help='use new synthesizer (default: %(default)s)')
     parser.add_argument('--synthesis-timeout', metavar='MS', type=int, default=30000, # 30 sec
                         help='synthesis timeout (default: %(default)s)')
     parser.add_argument('--synthesis-levels', metavar='LEVEL', nargs='+',
@@ -510,14 +538,9 @@ if __name__ == "__main__":
                         help='[deprecated] terminate when synthesis crashes (default: %(default)s)'
                         if "AF_DEBUG" in os.environ
                         else argparse.SUPPRESS)
+    parser.add_argument('--version', action='version', version='Angelix 1.0')
 
     args = parser.parse_args()
-
-    FORMAT = '%(levelname)-8s %(name)-15s %(message)s'
-    if args.quiet:
-        logging.basicConfig(level=logging.WARNING, format=FORMAT)
-    else:
-        logging.basicConfig(level=logging.INFO, format=FORMAT)
 
     def rm_force(action, name, exc):
         os.chmod(name, stat.S_IREAD)
@@ -527,6 +550,19 @@ if __name__ == "__main__":
     if exists(working_dir):
         shutil.rmtree(working_dir, onerror=rm_force)
     os.mkdir(working_dir)
+
+    rootLogger = logging.getLogger()
+    FORMAT = logging.Formatter('%(levelname)-8s %(name)-15s %(message)s')
+    if args.quiet:
+        rootLogger.setLevel(logging.WARNING)
+    else:
+        rootLogger.setLevel(logging.INFO)
+    fileHandler = logging.FileHandler("{0}/{1}.log".format(working_dir, 'angelix'))
+    fileHandler.setFormatter(FORMAT)
+    rootLogger.addHandler(fileHandler)
+    consoleHandler = logging.StreamHandler()
+    consoleHandler.setFormatter(FORMAT)
+    rootLogger.addHandler(consoleHandler)
 
     if vars(args)['assert'] is not None and not args.dump_only:
         with open(vars(args)['assert']) as output_file:
@@ -571,9 +607,11 @@ if __name__ == "__main__":
     config['test_timeout']          = args.test_timeout
     config['group_size']            = args.group_size
     config['group_by_score']        = args.group_by_score
+    config['localize_from_bottom']  = args.localize_from_bottom
     config['suspicious']            = args.suspicious
     config['localization']          = args.localization
     config['ignore_trivial']        = args.ignore_trivial
+    config['path_solving_timeout']  = args.path_solving_timeout
     config['max_angelic_paths']     = args.max_angelic_paths
     config['klee_max_forks']        = args.klee_max_forks
     config['klee_max_depth']        = args.klee_max_depth
@@ -584,6 +622,7 @@ if __name__ == "__main__":
     config['klee_ignore_errors']    = args.klee_ignore_errors
     config['ignore_trans_errors']   = args.ignore_trans_errors
     config['ignore_infer_errors']   = args.ignore_infer_errors
+    config['use_nsynth']            = args.use_nsynth
     config['synthesis_timeout']     = args.synthesis_timeout
     config['synthesis_levels']      = args.synthesis_levels
     config['synthesis_global_vars'] = args.synthesis_global_vars
@@ -607,6 +646,8 @@ if __name__ == "__main__":
     if args.verbose:
         for key, value in config.items():
             logger.info('option {} = {}'.format(key, value))
+
+    statistics.init(working_dir)
 
     if args.ignore_lines:
         args.lines = None
@@ -659,6 +700,8 @@ if __name__ == "__main__":
 
     end = time.time()
     elapsed = format_time(end - start)
+    statistics.data['time']['total'] = end - start
+    statistics.save()
 
     if patch is None:
         logger.info("no patch generated in {}".format(elapsed))

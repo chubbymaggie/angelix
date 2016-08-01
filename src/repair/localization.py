@@ -117,7 +117,8 @@ class Localizer:
             try:
                 score = formula(executed_positive[e], executed_negative[e], 
                                 len(positive), len(negative))
-                with_score.append((e, score))
+                if not (score == 0.0):  # 0.0 mean not executed by failing test
+                    with_score.append((e, score))
             except NoNegativeTestException:
                 logger.info("No negative test exists")
                 exit(0)
@@ -127,7 +128,10 @@ class Localizer:
         if self.config['group_by_score']:
             top = ranking[:suspicious]
         else:
-            top = sorted(ranking[:suspicious], key=lambda r: r[0][0])  # sort by location
+            if self.config['localize_from_bottom']:
+                top = sorted(ranking[:suspicious], key=lambda r: r[0][0], reverse=True)  # sort by location backward
+            else:
+                top = sorted(ranking[:suspicious], key=lambda r: r[0][0])  # sort by location
 
         groups_with_score = []
         for i in range(0, ceil(suspicious / group_size)):
